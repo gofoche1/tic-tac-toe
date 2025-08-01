@@ -1,0 +1,396 @@
+package com.example;
+
+//import java swing and awt for gui
+import java.awt.BasicStroke;
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.Font;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.Toolkit;
+import java.awt.event.MouseEvent;
+import java.awt.event.MouseListener;
+import java.awt.image.BufferedImage;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.util.Scanner;
+//for the x and o images
+import javax.imageio.ImageIO;
+import javax.swing.JFrame;
+import javax.swing.JPanel;
+
+
+public class TicTacToe1 implements Runnable {
+	private String ip = "127.0.0.1";
+	private int port = 8000;
+	private Scanner scanner = new Scanner(System.in);
+	private JFrame frame;
+	//(size of board dimension)
+	private final int length = 506;
+	private final int height= 527;
+	private Thread thread;
+
+
+	private Painter painter;
+	private Socket socket;
+	private DataOutputStream out;
+	private DataInputStream in;
+	private ServerSocket serverSocket;
+
+	private BufferedImage board;
+	private BufferedImage pinkX;
+	private BufferedImage greenX;
+	private BufferedImage pinkO;
+	private BufferedImage greenO;
+
+	private String[] spaces = new String[9];
+	private boolean yourTurn = false;
+	private boolean circle = true;
+	private boolean accepted = false;
+	private boolean noCommunication = false;
+	private boolean won = false;
+	private boolean enemyWon = false;
+	private boolean tie = false;
+
+	private int lengthOfSpace = 160;
+	private int errors = 0;
+	private int firstSpot = -1;
+	private int secondSpot = -1;
+
+
+	private Font smallFont = new Font("Calbri", Font.BOLD, 20);
+	private Font largeFont = new Font("Calbri", Font.BOLD, 50);
+
+
+	private String waitingString = "Waiting for player 2";
+	private String noCommunicationString = "Unable to communicate with opponent.";
+	private String wonString = "You won!";
+	private String enemyWonString = "You Lost :(";
+	private String tieString = "Game ended in a tie.";
+
+
+	private int[][] wins = new int[][] { { 0, 1, 2 }, { 3, 4, 5 }, 
+											{ 6, 7, 8 },{ 0, 3, 6 }, 
+											{ 1, 4, 7 }, { 2, 5, 8 }, 
+											{ 0, 4, 8 }, { 2, 4, 6 } 
+										};
+
+
+	public TicTacToe1() {
+		//Getting player input 
+		System.out.println("Please enter the IP: ");
+		ip = scanner.nextLine();
+		System.out.println("Please enter the port: ");
+		port = scanner.nextInt();
+		//65535 is the highest num of ports
+		while (port < 1 || port > 65535) {
+			System.out.println("Invalid port, try again ");
+			port = scanner.nextInt();
+		}
+		loadImages();
+		painter = new Painter();
+		painter.setPreferredSize(new Dimension(length, height));
+
+
+		if (!connect()) startServer();
+		//GUI for game
+		frame = new JFrame();
+		frame.setTitle("Tic Tac Toe");
+		frame.setContentPane(painter);
+		painter.setBackground(new Color(250, 218, 221));
+		frame.setContentPane(painter);
+		frame.setSize(length, height);
+		frame.setLocationRelativeTo(null);
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setResizable(false);
+		frame.setVisible(true);
+		
+		thread = new Thread(this, "TicTacToe");
+		thread.start();
+	}
+
+
+	public void run() {
+		while (true) {
+			turn();
+			painter.repaint();
+			if (!circle && !accepted) {
+				listenForServer();
+			}
+		}
+	}
+
+	private void logic(Graphics g) {
+		g.drawImage(board, 0, 0, null);
+		if (noCommunication) {
+			drawCenteredText(g, noCommunicationString, smallFont, Color.WHITE);
+			return;
+		}
+		if (accepted) {
+			drawGameBoard(g);
+			if (won || enemyWon) {
+				drawWinningLine(g);
+				drawCenteredText(g, won ? wonString : enemyWonString, largeFont, Color.RED);
+			} else if (tie) {
+				drawCenteredText(g, tieString, largeFont, Color.BLACK);
+			}
+		} else {
+			drawCenteredText(g, waitingString, smallFont, Color.RED);
+		}
+	}
+	
+	private void drawCenteredText(Graphics g, String text, Font font, Color color) {
+		Graphics2D g2 = (Graphics2D) g;
+		g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+		g.setFont(font);
+		g.setColor(color);
+		int stringWidth = g2.getFontMetrics().stringWidth(text);
+		g.drawString(text, (length/2) - (stringWidth/2), height/2);
+	}
+	
+	private void drawGameBoard(Graphics g) {
+		for (int i = 0; i < spaces.length; i++) {
+			if (spaces[i] != null) {
+				boolean isCircle = spaces[i].equals("O");
+				BufferedImage img = getImageForSpace(isCircle, circle);
+				g.drawImage(img, getXPosition(i), getYPosition(i), null);
+			}
+		}
+	}
+	
+	private BufferedImage getImageForSpace(boolean isCircle, boolean isCurrentPlayerCircle) {
+		if (isCircle) {
+			return isCurrentPlayerCircle? greenO : pinkO;
+		} else {
+			return isCurrentPlayerCircle? pinkX : greenX;
+		}
+	}
+	
+	private int getXPosition(int index) {
+		return (index % 3) * (lengthOfSpace+10) ;
+	}
+	
+	private int getYPosition(int index) {
+		return (index/3) * (lengthOfSpace+10);
+	}
+	
+	private void drawWinningLine(Graphics g) {
+		Graphics2D g2 = (Graphics2D) g;
+		g2.setStroke(new BasicStroke(10));
+		g.setColor(Color.BLACK);
+		int x1 = (firstSpot%3) * (lengthOfSpace+10) * (firstSpot%3) + (lengthOfSpace/2);
+		int y1 = (firstSpot/3) * (lengthOfSpace+10) * (firstSpot/3) + (lengthOfSpace/2);
+		int x2 = (secondSpot%3) * (lengthOfSpace+10) * (secondSpot %3) + (lengthOfSpace/2);
+		int y2 = (secondSpot/3) * (lengthOfSpace+10) * (secondSpot/ 3) + (lengthOfSpace/2);
+		g.drawLine(x1, y1, x2, y2);
+	}
+	
+
+
+	private void turn() {
+		if (errors >= 10) {
+			noCommunication = true;
+		}
+	
+		if (!yourTurn && !noCommunication) {
+			processEnemyMove();
+		}
+	}
+	
+	private void processEnemyMove() {
+		try {
+			int space = in.readInt();
+			spaces[space] = circle ? "X" : "O";
+			if (checkWin(space, !circle)) {
+				enemyWon = true;
+			} else if (checkForTie()) {
+				tie = true;
+			} else {
+				yourTurn = true;
+			}
+		} catch (IOException e) {
+			e.printStackTrace();
+			errors++;
+		}
+	}
+	
+	public boolean checkWin(int lastMove, boolean isCircle) {
+		String symbol = isCircle ? "O" : "X";
+		for (int[] winPattern : wins) {
+			if (symbol.equals(spaces[winPattern[0]]) &&
+				symbol.equals(spaces[winPattern[1]]) &&
+				symbol.equals(spaces[winPattern[2]])) {
+				
+				firstSpot = winPattern[0];
+				secondSpot = winPattern[2];
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	private boolean checkForTie() {
+		for (String space : spaces) {
+			if (space == null) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+// socket communication
+	private void listenForServer() {
+		Socket socket = null;
+		try {
+			socket = serverSocket.accept();
+			out = new DataOutputStream(socket.getOutputStream());
+			in = new DataInputStream(socket.getInputStream());
+			accepted = true;
+			System.out.println("CLIENT IS HERE");
+		} catch (IOException e) {
+			System.out.println("Error while waiting");
+			e.printStackTrace();
+		}
+	}
+
+
+	private boolean connect() {
+		try {
+			socket = new Socket(ip, port);
+			out = new DataOutputStream(socket.getOutputStream());
+			in = new DataInputStream(socket.getInputStream());
+			accepted = true;
+		} catch (IOException e) {
+			System.out.println("Unable to connect to the address: " + ip + ":" + port + " | Starting a server");
+			return false;
+		}
+		System.out.println("Connected to the server.");
+		return true;
+	}
+
+
+	private void startServer() {
+		try {
+			serverSocket = new ServerSocket(port, 8, InetAddress.getByName(ip));
+		} catch (Exception e) {
+			System.out.println("Error while initializing the server");
+			e.printStackTrace();
+		}
+		yourTurn = true;
+		circle = false;
+	}
+
+
+	private void loadImages() {
+		try {
+			board = ImageIO.read(getClass().getResourceAsStream("/board.png"));
+			pinkX = ImageIO.read(getClass().getResourceAsStream("/redX.png"));
+			pinkO = ImageIO.read(getClass().getResourceAsStream("/redCircle.png"));
+			greenX = ImageIO.read(getClass().getResourceAsStream("/greenX.png"));
+			greenO = ImageIO.read(getClass().getResourceAsStream("/blueCircle.png"));
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+
+
+	@SuppressWarnings("unused")
+	public static void main(String[] args) {
+		TicTacToe1 ticTacToe = new TicTacToe1();
+	}
+
+
+	private class Painter extends JPanel implements MouseListener {
+		private static final long serialVersionUID = 1L;
+
+
+		public Painter() {
+			setFocusable(true);
+			requestFocus();
+			//setBackground(Color.WHITE);
+			addMouseListener(this);
+		}
+
+
+		@Override
+		public void paintComponent(Graphics g) {
+			super.paintComponent(g);
+			logic(g);
+		}
+
+		private int lastMove;
+		@Override
+		public void mouseClicked(MouseEvent e) {
+			if (!isMoveAllowed()) return;
+		
+			int place = calculateBoardIndex(e.getX(), e.getY());
+			if (spaces[place] != null) return;
+		
+			makeMove(place);
+			sendMoveToOpponent(place);
+			checkGameStatus(); 
+		}
+		
+		private boolean isMoveAllowed() {
+			return accepted && yourTurn && !noCommunication && !won && !enemyWon;
+		}
+		
+		private int calculateBoardIndex(int mouseX, int mouseY) {
+			int x = mouseX / lengthOfSpace;
+			int y = mouseY / lengthOfSpace * 3;
+			return x + y;
+		}
+		
+		private void makeMove(int place) {
+			spaces[place] = circle ? "O" : "X";
+			// Update the last move
+			lastMove = place; 
+			yourTurn = false;
+			repaint();
+			Toolkit.getDefaultToolkit().sync();
+		}
+		
+		
+		private void sendMoveToOpponent(int place) {
+			try {
+				out.writeInt(place);
+				out.flush();
+				System.out.println("DATA SENT TO CLIENT");
+			} catch (IOException e) {
+				errors++;
+				e.printStackTrace();
+			}
+		}
+		
+		private void checkGameStatus() {
+			if (checkWin(lastMove, circle)) {
+				won = true;
+			} else if (checkWin(lastMove, !circle)) {
+				enemyWon = true;
+			} else if (checkForTie()) {
+				tie = true;
+			}
+		}
+// 
+		@Override
+		public void mousePressed(MouseEvent e) {
+
+		}
+		@Override
+		public void mouseReleased(MouseEvent e) {
+
+		}
+		@Override
+		public void mouseEntered(MouseEvent e) {
+
+		}
+		@Override
+		public void mouseExited(MouseEvent e) {
+		}
+	}
+}
